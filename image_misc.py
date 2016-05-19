@@ -4,9 +4,9 @@ import cv2
 import numpy as np
 import skimage
 import skimage.io
-from copy import deepcopy
 
 from misc import WithTimer
+
 
 
 def norm01(arr):
@@ -14,6 +14,7 @@ def norm01(arr):
     arr -= arr.min()
     arr /= arr.max() + 1e-10
     return arr
+
 
 
 def norm01c(arr, center):
@@ -27,6 +28,7 @@ def norm01c(arr, center):
     return arr
 
 
+
 def norm0255(arr):
     '''Maps the input range to [0,255] as dtype uint8'''
     arr = arr.copy()
@@ -36,33 +38,17 @@ def norm0255(arr):
     return arr
 
 
+
 def cv2_read_cap_rgb(cap, saveto = None):
     rval, frame = cap.read()
     if saveto:
         cv2.imwrite(saveto, frame)
-    if len(frame.shape) == 2:
-        # Upconvert single channel grayscale to color
-        frame = frame[:,:,np.newaxis]
-    if frame.shape[2] == 1:
-        frame = np.tile(frame, (1,1,3))
-    if frame.shape[2] > 3:
-        # Chop off transparency
-        frame = frame[:,:,:3]
     frame = frame[:,:,::-1]   # Convert native OpenCV BGR -> RGB
     return frame
 
     
 def cv2_read_file_rgb(filename):
-    '''Reads an image from file. Always returns (x,y,3)'''
     im = cv2.imread(filename)
-    if len(im.shape) == 2:
-        # Upconvert single channel grayscale to color
-        im = im[:,:,np.newaxis]
-    if im.shape[2] == 1:
-        im = np.tile(im, (1,1,3))
-    if im.shape[2] > 3:
-        # Chop off transparency
-        im = im[:,:,:3]
     im = im[:,:,::-1]   # Convert native OpenCV BGR -> RGB
     return im
 
@@ -72,9 +58,8 @@ def read_cam_frame(cap, saveto = None):
     frame = cv2_read_cap_rgb(cap, saveto = saveto)
     frame = frame[:,::-1,:]  # flip L-R for display
     frame -= frame.min()
-    frame = frame * (255.0 / (frame.max() + 1e-6))
+    frame *= (255.0 / (frame.max() + 1e-6))
     return frame
-
 
 def crop_to_square(frame):
     i_size,j_size = frame.shape[0],frame.shape[1]
@@ -86,7 +71,6 @@ def crop_to_square(frame):
         # portrait
         offset = (i_size - j_size) / 2
         return frame[offset:offset+j_size,:,:]
-
 
 def cv2_imshow_rgb(window_name, img):
     # Convert native OpenCV BGR -> RGB before displaying
@@ -123,7 +107,6 @@ def caffe_load_image(filename, color=True, as_uint=False):
         img = img[:, :, :3]
     return img
 
-
 def get_tiles_height_width(n_tiles, desired_width = None):
     '''Get a height x width size that will fit n_tiles tiles.'''
     if desired_width == None:
@@ -131,18 +114,21 @@ def get_tiles_height_width(n_tiles, desired_width = None):
         width = int(np.ceil(np.sqrt(n_tiles)))
         height = width
     else:
-        assert isinstance(desired_width, int)
-        width = desired_width
+        assert isinstance(width, int)
         height = int(np.ceil(float(n_tiles) / width))
     return height,width
         
-
-def get_tiles_height_width_ratio(n_tiles, width_ratio = 1.0):
-    '''Get a height x width size that will fit n_tiles tiles.'''
-    width = int(np.ceil(np.sqrt(n_tiles * width_ratio)))
-    return get_tiles_height_width(n_tiles, desired_width = width)
-        
-
+def tile_images(data, padsize = 1, padval = 0, c01 = False, width = None, boost_indiv = 0.0, boost_gamma = 1.0, highlights = None, single_tile = False):
+    '''take an array of shape (n, height, width) or (n, height, width, channels)
+    and visualize each (height, width) thing in a grid. If width = None, produce
+    a square image of size approx. sqrt(n) by sqrt(n), else calculate height given width value.
+    
+    If highlights is given, it should be a list of length data.shape[0] with each element a color triple or None'''
+    
+    data = tile_images_normalize(data, c01 = c01, boost_indiv = boost_indiv,  boost_gamma = boost_gamma, single_tile = single_tile)
+    (height,width), data = tile_images_make_tiles(data, padsize = padsize, padval = padval, width = width, highlights = highlights)
+    return (height,width), data
+    
 def tile_images_normalize(data, c01 = False, boost_indiv = 0.0,  boost_gamma = 1.0, single_tile = False, scale_range = 1.0, neg_pos_colors = None):
     data = data.copy()
     if single_tile:
@@ -182,6 +168,10 @@ def tile_images_normalize(data, c01 = False, boost_indiv = 0.0,  boost_gamma = 1
         data = (data.T * mm).T
     if boost_gamma != 1.0:
         data = data ** boost_gamma
+    #if False:
+    #    print 'SQRT gamma'
+    #    data = data ** .5
+    #assert False
 
     # Promote single-channel data to 3 channel color
     if len(data.shape) == 3:
@@ -189,20 +179,15 @@ def tile_images_normalize(data, c01 = False, boost_indiv = 0.0,  boost_gamma = 1
         data = np.tile(data[:,:,:,np.newaxis], 3)
 
     return data
+        
+def tile_images_make_tiles(data, padsize=1, padval=0, width=None, highlights = None):
+    height,width = get_tiles_height_width(data.shape[0], desired_width = width)
 
-
-def tile_images_make_tiles(data, padsize=1, padval=0, hw=None, highlights = None):
-    if hw:
-        height,width = hw
-    else:
-        height,width = get_tiles_height_width(data.shape[0])
-    assert height*width >= data.shape[0], '%d rows x %d columns cannot fit %d tiles' % (height, width, data.shape[0])
-
-    # First iteration: one-way padding, no highlights
+    # Old one-way padding, no highlights
     #padding = ((0, width*height - data.shape[0]), (0, padsize), (0, padsize)) + ((0, 0),) * (data.ndim - 3)
     #data = np.pad(data, padding, mode='constant', constant_values=(padval, padval))
 
-    # Second iteration: padding with highlights
+    # New two-way padding with highlights
     #padding = ((0, width*height - data.shape[0]), (padsize, padsize), (padsize, padsize)) + ((0, 0),) * (data.ndim - 3)
     #print 'tile_images: data min,max =', data.min(), data.max()
     #padder = SmartPadder()
@@ -210,7 +195,7 @@ def tile_images_make_tiles(data, padsize=1, padval=0, hw=None, highlights = None
     #data = np.pad(data, padding, mode=padder.pad_function)
     #print 'padder.calls =', padder.calls
     
-    # Third iteration: two-way padding with highlights
+    # New new way, two-way padding with highlights
     if highlights is not None:
         assert len(highlights) == data.shape[0]
     padding = ((0, width*height - data.shape[0]), (padsize, padsize), (padsize, padsize)) + ((0, 0),) * (data.ndim - 3)
@@ -246,14 +231,15 @@ def tile_images_make_tiles(data, padsize=1, padval=0, hw=None, highlights = None
                 data[ii,:,:padding[2][0],:] = highlight
                 if padding[2][1] > 0:
                     data[ii,:,-padding[2][1]:,:] = highlight
-
+            
+            
+    
     # tile the filters into an image
     data = data.reshape((height, width) + data.shape[1:]).transpose((0, 2, 1, 3) + tuple(range(4, data.ndim + 1)))
     data = data.reshape((height * data.shape[1], width * data.shape[3]) + data.shape[4:])
     data = data[0:-padsize, 0:-padsize]  # remove excess padding
     
     return (height,width), data
-
 
 def to_255(vals_01):
     '''Convert vals in [0,1] to [0,255]'''
@@ -267,16 +253,14 @@ def to_255(vals_01):
         # Not iterable (single int or float)
         return vals_01*255
 
-
 def ensure_uint255_and_resize_to_fit(img, out_max_shape,
-                                     shrink_interpolation = cv2.INTER_LINEAR,
-                                     grow_interpolation = cv2.INTER_NEAREST):
+                                     shrink_interpolation = cv2.INTER_CUBIC,
+                                     grow_interpolation = cv2.INTER_CUBIC):
     as_uint255 = ensure_uint255(img)
     return resize_to_fit(as_uint255, out_max_shape,
                          dtype_out = 'uint8',
                          shrink_interpolation = shrink_interpolation,
                          grow_interpolation = grow_interpolation)
-
 
 def ensure_uint255(arr):
     '''If data is float, multiply by 255 and convert to uint8. Else leave as uint8.'''
@@ -289,7 +273,6 @@ def ensure_uint255(arr):
     else:
         raise Exception('ensure_uint255 expects uint8 or float input but got %s with range [%g,%g,].' % (arr.dtype, arr.min(), arr.max()))
 
-
 def ensure_float01(arr, dtype_preference = 'float32'):
     '''If data is uint, convert to float and divide by 255. Else leave at float.'''
     if arr.dtype == 'uint8':
@@ -301,11 +284,10 @@ def ensure_float01(arr, dtype_preference = 'float32'):
     else:
         raise Exception('ensure_float01 expects uint8 or float input but got %s with range [%g,%g,].' % (arr.dtype, arr.min(), arr.max()))
 
-
 def resize_to_fit(img, out_max_shape,
                   dtype_out = None,
-                  shrink_interpolation = cv2.INTER_LINEAR,
-                  grow_interpolation = cv2.INTER_NEAREST):
+                  shrink_interpolation = cv2.INTER_CUBIC,
+                  grow_interpolation = cv2.INTER_CUBIC):
     '''Resizes to fit within out_max_shape. If ratio is different,
     returns an image that fits but is smaller along one of the two
     dimensions.
@@ -361,7 +343,6 @@ def resize_to_fit(img, out_max_shape,
         out = np.array(out, dtype=dtype_out)
     return out
 
-
 class FormattedString(object):
     def __init__(self, string, defaults, face=None, fsize=None, clr=None, thick=None, align=None, width=None):
         self.string = string
@@ -372,31 +353,22 @@ class FormattedString(object):
         self.width = width # if None: calculate width automatically
         self.align = align if align else defaults.get('align', 'left')
         
-
-def cv2_typeset_text(data, lines, loc, between = ' ', string_spacing = 0, line_spacing = 0, wrap = False):
+def cv2_typeset_text(data, lines, loc, between = ' ', string_spacing = 0, line_spacing = 0):
     '''Typesets mutliple strings on multiple lines of text, where each string may have its own formatting.
 
     Given:
     data: as in cv2.putText
     loc: as in cv2.putText
-    lines: list of lists of FormattedString objects, may be modified by this function!
+    lines: list of lists of FormattedString objects
     between: what to insert between each string on each line, ala str.join
     string_spacing: extra spacing to insert between strings on a line
     line_spacing: extra spacing to insert between lines
-    wrap: if true, wraps words to next line
 
     Returns:
     locy: new y location = loc[1] + y-offset resulting from lines of text
     '''
 
-    data_width = data.shape[1]
-
-    #lines_modified = False
-    #lines = lines_in    # will be deepcopied if modification is needed later
-
-    if isinstance(lines, FormattedString):
-        lines = [lines]
-    assert isinstance(lines, list), 'lines must be a list of lines or list of FormattedString objects or a single FormattedString object'
+    assert isinstance(lines, list), 'lines must be a list of lines or list of strings'
     if len(lines) == 0:
         return loc[1]
     if not isinstance(lines[0], list):
@@ -404,10 +376,8 @@ def cv2_typeset_text(data, lines, loc, between = ' ', string_spacing = 0, line_s
         lines = [lines]
     
     locy = loc[1]
-
-    line_num = 0
-    while line_num < len(lines):
-        line = lines[line_num]
+    
+    for line in lines:
         maxy = 0
         locx = loc[0]
         for ii,fs in enumerate(line):
@@ -420,21 +390,6 @@ def cv2_typeset_text(data, lines, loc, between = ' ', string_spacing = 0, line_s
                     locx += fs.width - boxsize[0]
                 elif fs.align == 'center':
                     locx += (fs.width - boxsize[0])/2
-            #print 'right boundary is', locx + boxsize[0], '(%s)' % fs.string
-                    #                print 'HERE'
-            right_edge = locx + boxsize[0]
-            if wrap and ii > 0 and right_edge > data_width:
-                # Wrap rest of line to the next line
-                #if not lines_modified:
-                #    lines = deepcopy(lines_in)
-                #    lines_modified = True
-                new_this_line = line[:ii]
-                new_next_line = line[ii:]
-                lines[line_num] = new_this_line
-                lines.insert(line_num+1, new_next_line)
-                break
-                ###line_num += 1
-                ###continue    
             cv2.putText(data, fs.string, (locx,locy), fs.face, fs.fsize, fs.clr, fs.thick)
             maxy = max(maxy, boxsize[1])
             if fs.width is not None:
@@ -447,28 +402,6 @@ def cv2_typeset_text(data, lines, loc, between = ' ', string_spacing = 0, line_s
             else:
                 locx += boxsize[0]
             locx += string_spacing
-        line_num += 1
         locy += maxy + line_spacing
         
     return locy
-
-
-
-def saveimage(filename, im):
-    '''Saves an image with pixel values in [0,1]'''
-    #matplotlib.image.imsave(filename, im)
-    if len(im.shape) == 3:
-        # Reverse RGB to OpenCV BGR order for color images
-        cv2.imwrite(filename, 255*im[:,:,::-1])
-    else:
-        cv2.imwrite(filename, 255*im)
-
-
-
-def saveimagesc(filename, im):
-    saveimage(filename, norm01(im))
-
-
-
-def saveimagescc(filename, im, center):
-    saveimage(filename, norm01c(im, center))

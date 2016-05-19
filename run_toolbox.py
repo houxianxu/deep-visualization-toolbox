@@ -1,21 +1,17 @@
 #! /usr/bin/env python
 
-import os
-from live_vis import LiveVis
+from core import LiveVis
 from bindings import bindings
 try:
     import settings
 except:
-    print '\nError importing settings.py. Check the error message below for more information.'
-    print "If you haven't already, you'll want to copy one of the settings_local.template-*.py files"
-    print 'to settings_local.py and edit it to point to your caffe checkout. E.g. via:'
+    print '\nCould not import settings from settings.py. You should first copy'
+    print 'settings.py.template to settings.py and edit the caffevis_caffe_root'
+    print 'variable to point to your caffe path.'
     print
-    print '  $ cp models/caffenet-yos/settings_local.template-caffenet-yos.py settings_local.py'
-    print '  $ < edit settings_local.py >\n'
+    print '  $ cp settings.py.template settings.py'
+    print '  $ < edit settings.py >\n'
     raise
-
-if not os.path.exists(settings.caffevis_caffe_root):
-    raise Exception('ERROR: Set caffevis_caffe_root in settings.py first.')
 
 
 
